@@ -1,23 +1,29 @@
 import { API_CONFIG } from './api-config';
+import type { ApiResponse } from '@fitpilot/shared';
 
-// ─── Lightweight Fetch-Based API Client ───────────────────────────────────────
-// Phase 1: simple wrapper around fetch. We'll add axios + interceptors in Phase 2
-// once we have auth tokens to inject.
-//
-// All API calls return ApiResponse<T> — always check `response.success` before use.
-
-export type ApiSuccess<T> = { success: true; data: T };
-export type ApiError = {
-  success: false;
-  error: { code: string; message: string; details?: unknown };
-};
-export type ApiResponse<T> = ApiSuccess<T> | ApiError;
+// ─── Production-Grade API Client ─────────────────────────────────────────────
+// - Automatically injects Bearer JWT authentication header
+// - Centralizes error handling and network detection
+// - Type-safe with shared ApiResponse<T>
 
 class ApiClient {
   private baseURL: string;
+  private authToken: string | null = null;
 
   constructor(baseURL: string) {
     this.baseURL = baseURL.replace(/\/$/, ''); // strip trailing slash
+  }
+
+  setAuthToken(token: string): void {
+    this.authToken = token;
+  }
+
+  clearAuthToken(): void {
+    this.authToken = null;
+  }
+
+  getAuthToken(): string | null {
+    return this.authToken;
   }
 
   private async request<T>(
@@ -27,17 +33,24 @@ class ApiClient {
   ): Promise<ApiResponse<T>> {
     const url = `${this.baseURL}${path}`;
 
+    const headers: Record<string, string> = {
+      ...API_CONFIG.headers,
+    };
+
+    if (this.authToken) {
+      headers['Authorization'] = `Bearer ${this.authToken}`;
+    }
+
     try {
       const response = await fetch(url, {
         method,
-        headers: API_CONFIG.headers,
+        headers,
         ...(body ? { body: JSON.stringify(body) } : {}),
       });
 
       const json = await response.json();
       return json as ApiResponse<T>;
     } catch (error) {
-      // Network error — no response received
       return {
         success: false,
         error: {
@@ -55,15 +68,15 @@ class ApiClient {
     return this.request<T>('GET', path);
   }
 
-  async post<T>(path: string, body: unknown): Promise<ApiResponse<T>> {
+  async post<T>(path: string, body?: unknown): Promise<ApiResponse<T>> {
     return this.request<T>('POST', path, body);
   }
 
-  async put<T>(path: string, body: unknown): Promise<ApiResponse<T>> {
+  async put<T>(path: string, body?: unknown): Promise<ApiResponse<T>> {
     return this.request<T>('PUT', path, body);
   }
 
-  async patch<T>(path: string, body: unknown): Promise<ApiResponse<T>> {
+  async patch<T>(path: string, body?: unknown): Promise<ApiResponse<T>> {
     return this.request<T>('PATCH', path, body);
   }
 

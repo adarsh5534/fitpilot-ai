@@ -3,7 +3,7 @@
     "target": "ES2022",
     "module": "CommonJS",
     "lib": ["ES2022"],
-    "rootDir": "./src",
+    "rootDir": "../..",
     "outDir": "./dist",
     "strict": true,
     "esModuleInterop": true,
@@ -18,6 +18,6 @@
       "@fitpilot/shared": ["../../packages/shared/src/index.ts"]
     }
   },
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "../../packages/shared/src/**/*"],
   "exclude": ["node_modules", "dist"]
 }

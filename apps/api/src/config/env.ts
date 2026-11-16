@@ -32,6 +32,14 @@ const EnvSchema = z.object({
     .string()
     .min(1, 'SUPABASE_SERVICE_ROLE_KEY is required'),
 
+  // JWT — used to sign our own access and refresh tokens
+  JWT_SECRET: z
+    .string()
+    .min(32, 'JWT_SECRET must be at least 32 characters for security'),
+
+  JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
+  JWT_REFRESH_EXPIRES_IN: z.string().default('30d'),
+
   // OpenAI — optional in Phase 1, required in Phase 5
   OPENAI_API_KEY: z.string().optional(),
 });

@@ -6,6 +6,9 @@
       "@/*": [
         "./src/*"
       ],
+      "@fitpilot/shared": [
+        "../../packages/shared/src/index.ts"
+      ],
       "@/assets/*": [
         "./assets/*"
       ]
