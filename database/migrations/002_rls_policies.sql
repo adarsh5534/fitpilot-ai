@@ -54,19 +54,31 @@ CREATE POLICY "Authenticated users can add food items"
   WITH CHECK (auth.role() = 'authenticated' AND created_by = auth.uid());
 
 -- ── workout_plans ─────────────────────────────────────────────────────────────
-CREATE POLICY "Users can CRUD their own workout plans"
+CREATE POLICY "Users can view templates or their own workout plans"
+  ON public.workout_plans FOR SELECT
+  USING (user_id IS NULL OR auth.uid() = user_id);
+
+CREATE POLICY "Users can modify their own workout plans"
   ON public.workout_plans FOR ALL
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
 -- ── workout_plan_days ─────────────────────────────────────────────────────────
-CREATE POLICY "Users can CRUD their own plan days"
+CREATE POLICY "Users can view templates or their own plan days"
+  ON public.workout_plan_days FOR SELECT
+  USING (user_id IS NULL OR auth.uid() = user_id);
+
+CREATE POLICY "Users can modify their own plan days"
   ON public.workout_plan_days FOR ALL
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
 -- ── plan_day_exercises ────────────────────────────────────────────────────────
-CREATE POLICY "Users can CRUD their own plan exercises"
+CREATE POLICY "Users can view templates or their own plan exercises"
+  ON public.plan_day_exercises FOR SELECT
+  USING (user_id IS NULL OR auth.uid() = user_id);
+
+CREATE POLICY "Users can modify their own plan exercises"
   ON public.plan_day_exercises FOR ALL
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);

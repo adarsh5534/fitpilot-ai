@@ -65,6 +65,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS user_profiles_updated_at ON public.user_profiles;
 CREATE TRIGGER user_profiles_updated_at
   BEFORE UPDATE ON public.user_profiles
   FOR EACH ROW
@@ -96,17 +97,20 @@ CREATE TABLE IF NOT EXISTS public.exercises (
 
 CREATE TABLE IF NOT EXISTS public.workout_plans (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id         UUID REFERENCES auth.users(id) ON DELETE CASCADE, -- NULL for system templates
   name            TEXT NOT NULL,
   description     TEXT,
+  difficulty      TEXT CHECK (difficulty IN ('beginner', 'intermediate', 'advanced')),
   goal            TEXT CHECK (goal IN ('fat_loss', 'muscle_gain', 'maintenance', 'general_fitness')),
   days_per_week   INTEGER CHECK (days_per_week BETWEEN 1 AND 7),
-  is_active       BOOLEAN NOT NULL DEFAULT FALSE,  -- only one plan active at a time
+  is_template     BOOLEAN NOT NULL DEFAULT FALSE,
+  is_active       BOOLEAN NOT NULL DEFAULT FALSE,  -- only one user plan active at a time
   is_ai_generated BOOLEAN NOT NULL DEFAULT FALSE,
   created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+DROP TRIGGER IF EXISTS workout_plans_updated_at ON public.workout_plans;
 CREATE TRIGGER workout_plans_updated_at
   BEFORE UPDATE ON public.workout_plans
   FOR EACH ROW
@@ -118,7 +122,7 @@ CREATE TRIGGER workout_plans_updated_at
 CREATE TABLE IF NOT EXISTS public.workout_plan_days (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   plan_id         UUID NOT NULL REFERENCES public.workout_plans(id) ON DELETE CASCADE,
-  user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id         UUID REFERENCES auth.users(id) ON DELETE CASCADE, -- NULL for system templates
   day_number      INTEGER NOT NULL CHECK (day_number BETWEEN 1 AND 7),
   name            TEXT NOT NULL,             -- e.g. "Push Day", "Leg Day"
   notes           TEXT,
@@ -131,7 +135,7 @@ CREATE TABLE IF NOT EXISTS public.workout_plan_days (
 CREATE TABLE IF NOT EXISTS public.plan_day_exercises (
   id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   plan_day_id     UUID NOT NULL REFERENCES public.workout_plan_days(id) ON DELETE CASCADE,
-  user_id         UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  user_id         UUID REFERENCES auth.users(id) ON DELETE CASCADE, -- NULL for system templates
   exercise_id     UUID NOT NULL REFERENCES public.exercises(id),
   display_order   INTEGER NOT NULL DEFAULT 0,
   target_sets     INTEGER NOT NULL DEFAULT 3,
@@ -161,6 +165,7 @@ CREATE TABLE IF NOT EXISTS public.workout_sessions (
   updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+DROP TRIGGER IF EXISTS workout_sessions_updated_at ON public.workout_sessions;
 CREATE TRIGGER workout_sessions_updated_at
   BEFORE UPDATE ON public.workout_sessions
   FOR EACH ROW

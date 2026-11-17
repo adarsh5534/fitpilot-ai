@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -14,47 +17,232 @@ import { Icon } from '@/components/ui/icon';
 import { Ring } from '@/components/ui/ring';
 import { Header } from '@/components/ui/header';
 import { SectionTitle } from '@/components/ui/section-title';
+import { useWorkoutStore } from '@/stores/workout.store';
+import type { Exercise, WorkoutSessionDetail } from '@fitpilot/shared';
 
 const C = Colors.dark;
 
-const EXERCISES_LIST = [
-  { name: 'Barbell Bench Press', meta: '4 sets · 6–8 reps', prev: 'Last: 80 kg × 7', letter: 'BP' },
-  { name: 'Incline Dumbbell Press', meta: '3 sets · 8–10 reps', prev: 'Last: 28 kg × 9', letter: 'IP' },
-  { name: 'Cable Chest Fly', meta: '3 sets · 10–12 reps', prev: 'Last: 16 kg × 12', letter: 'CF' },
-  { name: 'Rope Tricep Pushdown', meta: '3 sets · 10–12 reps', prev: 'Last: 25 kg × 11', letter: 'TP' },
-];
+function formatTime(seconds: number): string {
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+}
+
+function getInitials(name: string): string {
+  return name
+    .split(' ')
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase())
+    .join('');
+}
+
+interface WeekDayItem {
+  dayName: string;
+  dateNumber: number;
+  isToday: boolean;
+  dayIndex: number;
+}
+
+function getWeekDates(): WeekDayItem[] {
+  const now = new Date();
+  const currentDayOfWeek = now.getDay(); // 0 is Sunday, 1 is Monday, ..., 6 is Saturday
+  const distanceToMonday = currentDayOfWeek === 0 ? -6 : 1 - currentDayOfWeek;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + distanceToMonday);
+
+  const dayNames = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+  const days: WeekDayItem[] = [];
+
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    days.push({
+      dayName: dayNames[i],
+      dateNumber: d.getDate(),
+      isToday: d.toDateString() === now.toDateString(),
+      dayIndex: i,
+    });
+  }
+
+  return days;
+}
 
 export default function WorkoutScreen() {
   const router = useRouter();
 
-  const [active, setActive] = useState(false);
-  const [done, setDone] = useState<number[]>([]);
-  const [rest, setRest] = useState(0);
-  const [selectedDay, setSelectedDay] = useState(2);
+  const {
+    todaySuggestion,
+    activeSession,
+    history,
+    exerciseLibrary,
+    isLoading,
+    elapsedSeconds,
+    restTimer,
+    restTimerDuration,
+    fetchTodaySuggestion,
+    fetchActiveSession,
+    startSession,
+    cancelSession,
+    logSet,
+    finishSession,
+    fetchHistory,
+    fetchExerciseLibrary,
+    cancelRestTimer,
+    addRestSeconds,
+    tick,
+  } = useWorkoutStore();
+
+  const weekDates = React.useMemo(() => getWeekDates(), []);
+  const todayIndex = weekDates.findIndex((d) => d.isToday);
+  const [selectedDay, setSelectedDay] = useState(todayIndex !== -1 ? todayIndex : 1);
   const [filterCategory, setFilterCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+  const [lastFinishedSession, setLastFinishedSession] = useState<WorkoutSessionDetail | null>(null);
 
-  // Active workout rest timer countdown
+  // Local set inputs state: { [exerciseId_setNumber]: { weight: string; reps: string } }
+  const [setInputs, setSetInputs] = useState<Record<string, { weight: string; reps: string }>>({});
+
+  // 1. Initial Data Fetch
   useEffect(() => {
-    if (!rest) return;
-    const timer = setInterval(() => setRest((v) => Math.max(0, v - 1)), 1000);
-    return () => clearInterval(timer);
-  }, [rest]);
+    fetchTodaySuggestion();
+    fetchActiveSession();
+    fetchHistory();
+    fetchExerciseLibrary();
+  }, [fetchTodaySuggestion, fetchActiveSession, fetchHistory, fetchExerciseLibrary]);
 
-  const toggleSetComplete = (index: number) => {
-    setDone((prev) => {
-      const isAlreadyDone = prev.includes(index);
-      if (isAlreadyDone) {
-        return prev.filter((i) => i !== index);
+  // 2. Timer Loop for stopwatch and rest countdown
+  useEffect(() => {
+    const timer = setInterval(() => {
+      tick();
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [tick]);
+
+  // 3. Category/Search changes
+  useEffect(() => {
+    fetchExerciseLibrary(filterCategory, searchQuery);
+  }, [filterCategory, searchQuery, fetchExerciseLibrary]);
+
+  const handleStartWorkout = async () => {
+    try {
+      let session: WorkoutSessionDetail | null = null;
+      if (todaySuggestion?.day_id) {
+        session = await startSession(todaySuggestion.day_id, todaySuggestion.day_name);
       } else {
-        setRest(90); // 90 second rest timer
-        return [...prev, index];
+        session = await startSession(undefined, 'Freestyle Workout');
       }
+
+      if (!session) {
+        const err = useWorkoutStore.getState().error;
+        Alert.alert(
+          'Workout',
+          err || 'Unable to start workout session. Please verify your connection.'
+        );
+      }
+    } catch (err) {
+      Alert.alert('Error', err instanceof Error ? err.message : 'Failed to start workout');
+    }
+  };
+
+  const handleDiscardWorkout = () => {
+    Alert.alert(
+      'Discard Workout?',
+      'Are you sure you want to discard this workout session? Sets and progress will not be recorded.',
+      [
+        { text: 'Keep Going', style: 'cancel' },
+        {
+          text: 'Discard',
+          style: 'destructive',
+          onPress: async () => {
+            const ok = await cancelSession();
+            if (!ok) {
+              const err = useWorkoutStore.getState().error;
+              Alert.alert('Error', err || 'Failed to cancel session');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleFinishWorkout = () => {
+    Alert.alert(
+      'Finish Workout',
+      'Are you ready to complete and log this workout?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Finish',
+          style: 'default',
+          onPress: async () => {
+            const res = await finishSession('Workout completed successfully');
+            if (res) {
+              setLastFinishedSession(res);
+              setShowSummaryModal(true);
+            } else {
+              const err = useWorkoutStore.getState().error;
+              Alert.alert('Error', err || 'Failed to finish workout');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleLogSet = async (
+    exerciseId: string,
+    setNumber: number,
+    defaultWeight: number | null,
+    defaultReps: number
+  ) => {
+    const key = `${exerciseId}_${setNumber}`;
+    const input = setInputs[key];
+    const weight = input?.weight ? parseFloat(input.weight) : defaultWeight ?? 0;
+    const reps = input?.reps ? parseInt(input.reps, 10) : defaultReps;
+
+    await logSet({
+      exercise_id: exerciseId,
+      set_number: setNumber,
+      weight_kg: isNaN(weight) ? undefined : weight,
+      reps_completed: isNaN(reps) ? undefined : reps,
+      is_warmup: false,
+      is_skipped: false,
     });
   };
 
-  // ── ACTIVE WORKOUT VIEW ──────────────────────────────────────────────────
-  if (active) {
+  const isSetCompleted = (exerciseId: string, setNumber: number) => {
+    return activeSession?.sets?.some(
+      (s) => s.exercise_id === exerciseId && s.set_number === setNumber && !s.is_skipped
+    );
+  };
+
+  // ── ACTIVE IN-WORKOUT VIEW ────────────────────────────────────────────────
+  if (activeSession) {
+    const exercisesToRender = (() => {
+      if (activeSession.plan_day?.exercises && activeSession.plan_day.exercises.length > 0) {
+        return activeSession.plan_day.exercises.map((pe) => {
+          const match = todaySuggestion?.exercises?.find((te) => te.exercise.id === pe.exercise.id);
+          return {
+            exercise: pe.exercise,
+            target_sets: pe.target_sets,
+            target_reps_min: pe.target_reps_min,
+            target_reps_max: pe.target_reps_max,
+            target_weight_kg: pe.target_weight_kg ?? null,
+            suggested_weight_kg: match?.suggested_weight_kg ?? pe.target_weight_kg,
+            previous_weight_kg: match?.previous_weight_kg ?? null,
+            previous_reps: match?.previous_reps ?? null,
+          };
+        });
+      }
+      if (todaySuggestion?.exercises && todaySuggestion.exercises.length > 0) {
+        return todaySuggestion.exercises;
+      }
+      return [];
+    })();
+
+    const totalTargetSets = exercisesToRender.reduce((acc, e) => acc + e.target_sets, 0);
+
     return (
       <View style={styles.root}>
         <SafeAreaView style={styles.safe} edges={['top']}>
@@ -66,22 +254,28 @@ export default function WorkoutScreen() {
             {/* Header */}
             <View style={styles.activeWorkoutHeader}>
               <TouchableOpacity
-                style={styles.iconButton}
-                onPress={() => setActive(false)}
+                style={styles.discardBtn}
+                onPress={handleDiscardWorkout}
                 activeOpacity={0.7}
+                disabled={isLoading}
               >
-                <Icon name="back" size={20} color="#DFE3DD" />
+                <Icon name="x" size={18} color="#FF6B6B" />
               </TouchableOpacity>
               <View style={styles.activeWorkoutCenter}>
-                <Text style={styles.activeWorkoutKicker}>ACTIVE WORKOUT</Text>
-                <Text style={styles.activeWorkoutTitle}>Chest & Triceps</Text>
+                <Text style={styles.activeWorkoutKicker}>LIVE WORKOUT</Text>
+                <Text style={styles.activeWorkoutTitle}>{activeSession.name}</Text>
               </View>
               <TouchableOpacity
                 style={styles.finishBtn}
-                onPress={() => setActive(false)}
+                onPress={handleFinishWorkout}
                 activeOpacity={0.8}
+                disabled={isLoading}
               >
-                <Text style={styles.finishBtnText}>Finish</Text>
+                {isLoading ? (
+                  <ActivityIndicator size="small" color="#101211" />
+                ) : (
+                  <Text style={styles.finishBtnText}>Finish</Text>
+                )}
               </TouchableOpacity>
             </View>
 
@@ -89,119 +283,167 @@ export default function WorkoutScreen() {
             <View style={styles.workoutTimeBar}>
               <View style={styles.workoutTimeItem}>
                 <Text style={styles.workoutTimeLabel}>Duration</Text>
-                <Text style={styles.workoutTimeValue}>24:18</Text>
+                <Text style={styles.workoutTimeValue}>{formatTime(elapsedSeconds)}</Text>
               </View>
               <View style={styles.workoutTimeItem}>
                 <Text style={styles.workoutTimeLabel}>Volume</Text>
-                <Text style={styles.workoutTimeValue}>4,820 kg</Text>
+                <Text style={styles.workoutTimeValue}>
+                  {(activeSession.total_volume_kg || 0).toLocaleString()} kg
+                </Text>
               </View>
               <View style={[styles.workoutTimeItem, { borderRightWidth: 0 }]}>
-                <Text style={styles.workoutTimeLabel}>Sets</Text>
-                <Text style={styles.workoutTimeValue}>{done.length}/10</Text>
+                <Text style={styles.workoutTimeLabel}>Sets Completed</Text>
+                <Text style={styles.workoutTimeValue}>
+                  {activeSession.sets?.length || 0}
+                  {totalTargetSets > 0 ? ` / ${totalTargetSets}` : ''}
+                </Text>
               </View>
             </View>
 
-            {/* Active Exercise Card */}
-            <View style={styles.activeExerciseCard}>
-              <View style={styles.exerciseHeading}>
-                <View style={styles.exerciseArt}>
-                  <Text style={styles.exerciseArtText}>BP</Text>
-                </View>
-                <View style={styles.exerciseHeadingInfo}>
-                  <Text style={styles.exerciseName}>Barbell Bench Press</Text>
-                  <Text style={styles.exerciseMeta}>4 sets · 6–8 reps</Text>
-                </View>
-                <TouchableOpacity activeOpacity={0.7}>
-                  <Icon name="more" size={20} color={C.textSecondary} />
-                </TouchableOpacity>
-              </View>
+            {/* Exercises List */}
+            {exercisesToRender.length > 0 ? (
+              exercisesToRender.map((item) => {
+                const ex = item.exercise;
+                const initials = getInitials(ex.name);
 
-              {/* Set Labels */}
-              <View style={styles.setLabels}>
-                <Text style={[styles.setLabelText, { width: 28 }]}>SET</Text>
-                <Text style={[styles.setLabelText, { flex: 1.25 }]}>PREVIOUS</Text>
-                <Text style={[styles.setLabelText, { flex: 0.7 }]}>KG</Text>
-                <Text style={[styles.setLabelText, { flex: 0.7 }]}>REPS</Text>
-                <Text style={{ width: 34 }} />
-              </View>
-
-              {/* Set Rows */}
-              {[
-                { set: '1', prev: '77.5 × 8', kg: '80', reps: '8' },
-                { set: '2', prev: '77.5 × 7', kg: '80', reps: '7' },
-                { set: '3', prev: '77.5 × 7', kg: '80', reps: '' },
-                { set: '4', prev: '75 × 8', kg: '77.5', reps: '' },
-              ].map((row, i) => {
-                const isComplete = done.includes(i);
                 return (
-                  <View
-                    key={row.set}
-                    style={[styles.setRow, isComplete && styles.setRowCompleted]}
-                  >
-                    <Text style={styles.setNum}>{row.set}</Text>
-                    <Text style={styles.setPrev}>{row.prev}</Text>
-                    <TextInput
-                      style={styles.setInput}
-                      defaultValue={row.kg}
-                      keyboardType="numeric"
-                    />
-                    <TextInput
-                      style={styles.setInput}
-                      defaultValue={row.reps}
-                      placeholder="—"
-                      placeholderTextColor={C.textMuted}
-                      keyboardType="numeric"
-                    />
-                    <TouchableOpacity
-                      style={[styles.setCheckBtn, isComplete && styles.setCheckBtnDone]}
-                      onPress={() => toggleSetComplete(i)}
-                      activeOpacity={0.7}
-                    >
-                      <Icon
-                        name="check"
-                        size={16}
-                        color={isComplete ? '#101210' : '#788078'}
-                      />
-                    </TouchableOpacity>
+                  <View key={ex.id} style={styles.activeExerciseCard}>
+                    <View style={styles.exerciseHeading}>
+                      <View style={styles.exerciseArt}>
+                        <Text style={styles.exerciseArtText}>{initials}</Text>
+                      </View>
+                      <View style={styles.exerciseHeadingInfo}>
+                        <Text style={styles.exerciseName}>{ex.name}</Text>
+                        <Text style={styles.exerciseMeta}>
+                          {item.target_sets} sets · {item.target_reps_min}–{item.target_reps_max} reps
+                          {item.suggested_weight_kg ? ` · Suggested ${item.suggested_weight_kg} kg` : ''}
+                        </Text>
+                      </View>
+                    </View>
+
+                    {/* Set Headers */}
+                    <View style={styles.setLabels}>
+                      <Text style={[styles.setLabelText, { width: 32 }]}>SET</Text>
+                      <Text style={[styles.setLabelText, { flex: 1.2 }]}>TARGET / PREV</Text>
+                      <Text style={[styles.setLabelText, { flex: 0.8 }]}>KG</Text>
+                      <Text style={[styles.setLabelText, { flex: 0.8 }]}>REPS</Text>
+                      <Text style={{ width: 36 }} />
+                    </View>
+
+                    {/* Set Rows */}
+                    {Array.from({ length: item.target_sets }).map((_, idx) => {
+                      const setNum = idx + 1;
+                      const completed = isSetCompleted(ex.id, setNum);
+                      const key = `${ex.id}_${setNum}`;
+
+                      const defaultKg = item.suggested_weight_kg ?? item.target_weight_kg ?? '';
+                      const defaultReps = item.target_reps_max.toString();
+
+                      const prevText = item.previous_weight_kg
+                        ? `${item.previous_weight_kg} kg × ${item.previous_reps || item.target_reps_max}`
+                        : `${item.suggested_weight_kg ?? '—'} kg × ${item.target_reps_min}-${item.target_reps_max}`;
+
+                      return (
+                        <View
+                          key={setNum}
+                          style={[styles.setRow, completed && styles.setRowCompleted]}
+                        >
+                          <Text style={styles.setNum}>{setNum}</Text>
+                          <Text style={styles.setPrev} numberOfLines={1}>
+                            {prevText}
+                          </Text>
+                          <TextInput
+                            style={[styles.setInput, completed && styles.setInputDone]}
+                            placeholder={defaultKg ? String(defaultKg) : '0'}
+                            placeholderTextColor={C.textMuted}
+                            keyboardType="numeric"
+                            value={setInputs[key]?.weight}
+                            onChangeText={(t) =>
+                              setSetInputs((prev) => ({
+                                ...prev,
+                                [key]: { ...(prev[key] || { reps: defaultReps }), weight: t },
+                              }))
+                            }
+                            editable={!completed}
+                          />
+                          <TextInput
+                            style={[styles.setInput, completed && styles.setInputDone]}
+                            placeholder={defaultReps}
+                            placeholderTextColor={C.textMuted}
+                            keyboardType="numeric"
+                            value={setInputs[key]?.reps}
+                            onChangeText={(t) =>
+                              setSetInputs((prev) => ({
+                                ...prev,
+                                [key]: {
+                                  ...(prev[key] || { weight: String(defaultKg) }),
+                                  reps: t,
+                                },
+                              }))
+                            }
+                            editable={!completed}
+                          />
+                          <TouchableOpacity
+                            style={[styles.setCheckBtn, completed && styles.setCheckBtnDone]}
+                            onPress={() =>
+                              handleLogSet(
+                                ex.id,
+                                setNum,
+                                item.suggested_weight_kg,
+                                item.target_reps_max
+                              )
+                            }
+                            activeOpacity={0.7}
+                            disabled={completed}
+                          >
+                            <Icon
+                              name="check"
+                              size={16}
+                              color={completed ? '#101211' : '#788078'}
+                            />
+                          </TouchableOpacity>
+                        </View>
+                      );
+                    })}
                   </View>
                 );
-              })}
-
-              <TouchableOpacity style={styles.addSetBtn} activeOpacity={0.7}>
-                <Icon name="plus" size={16} color="#ADB3AD" />
-                <Text style={styles.addSetText}>Add set</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Next Exercise Preview */}
-            <View style={styles.nextExerciseCard}>
-              <Text style={styles.nextExerciseKicker}>NEXT EXERCISE</Text>
-              <Text style={styles.nextExerciseName}>Incline Dumbbell Press</Text>
-              <Text style={styles.nextExerciseMeta}>3 sets · 8–10 reps</Text>
-            </View>
+              })
+            ) : (
+              <View style={styles.emptySessionBox}>
+                <Text style={styles.emptySessionTitle}>Freestyle Session In Progress</Text>
+                <Text style={styles.emptySessionSub}>
+                  Record sets or explore the exercise library below.
+                </Text>
+              </View>
+            )}
           </ScrollView>
 
-          {/* Floating Rest Timer */}
-          {rest > 0 ? (
+          {/* Floating Rest Timer Pill */}
+          {restTimer > 0 ? (
             <View style={styles.floatingRestTimer}>
-              <Ring value={((90 - rest) / 90) * 100} size={44} width={4}>
+              <Ring
+                value={Math.min(100, ((restTimerDuration - restTimer) / restTimerDuration) * 100)}
+                size={44}
+                width={4}
+                color={C.accent}
+              >
                 <Icon name="clock" size={16} color={C.accent} />
               </Ring>
               <View style={styles.restTimerInfo}>
                 <Text style={styles.restTimerKicker}>REST TIMER</Text>
-                <Text style={styles.restTimerValue}>
-                  {Math.floor(rest / 60)}:{String(rest % 60).padStart(2, '0')}
-                </Text>
+                <Text style={styles.restTimerValue}>{formatTime(restTimer)}</Text>
               </View>
               <TouchableOpacity
                 style={styles.restTimerBtn}
-                onPress={() => setRest((r) => r + 30)}
+                onPress={() => addRestSeconds(30)}
+                activeOpacity={0.7}
               >
                 <Text style={styles.restTimerBtnText}>+30s</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.restTimerBtn}
-                onPress={() => setRest(0)}
+                onPress={cancelRestTimer}
+                activeOpacity={0.7}
               >
                 <Text style={[styles.restTimerBtnText, { color: C.accent }]}>Skip</Text>
               </TouchableOpacity>
@@ -212,7 +454,7 @@ export default function WorkoutScreen() {
     );
   }
 
-  // ── STANDARD WORKOUT SCHEDULE VIEW ──────────────────────────────────────
+  // ── STANDARD WORKOUT DASHBOARD & SCHEDULE VIEW ──────────────────────────
   return (
     <View style={styles.root}>
       <SafeAreaView style={styles.safe} edges={['top']}>
@@ -230,77 +472,83 @@ export default function WorkoutScreen() {
 
           {/* Week Strip */}
           <View style={styles.weekStrip}>
-            {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((day, i) => {
-              const isSelected = selectedDay === i;
-              const isDone = i < 2;
+            {weekDates.map((item) => {
+              const isSelected = selectedDay === item.dayIndex;
+              const isPastOrToday = item.dayIndex <= todayIndex;
+
               return (
                 <TouchableOpacity
-                  key={i}
+                  key={item.dayIndex}
                   style={[
                     styles.weekDayBtn,
                     isSelected && styles.weekDaySelected,
-                    isDone && !isSelected && styles.weekDayDone,
+                    isPastOrToday && !isSelected && styles.weekDayDone,
                   ]}
-                  onPress={() => setSelectedDay(i)}
+                  onPress={() => setSelectedDay(item.dayIndex)}
                   activeOpacity={0.7}
                 >
-                  <Text
-                    style={[
-                      styles.weekDayName,
-                      isSelected && styles.weekDayTextActive,
-                    ]}
-                  >
-                    {day}
+                  <Text style={[styles.weekDayName, isSelected && styles.weekDayTextActive]}>
+                    {item.dayName}
                   </Text>
-                  <Text
-                    style={[
-                      styles.weekDayNum,
-                      isSelected && styles.weekDayTextActive,
-                    ]}
-                  >
-                    {16 + i}
+                  <Text style={[styles.weekDayNum, isSelected && styles.weekDayTextActive]}>
+                    {item.dateNumber}
                   </Text>
-                  {isDone && !isSelected ? (
+                  {item.dayIndex < todayIndex && !isSelected ? (
                     <View style={styles.doneCheckDot}>
                       <Icon name="check" size={10} color={C.accent} />
                     </View>
+                  ) : null}
+                  {item.isToday && !isSelected ? (
+                    <View style={styles.todayIndicatorDot} />
                   ) : null}
                 </TouchableOpacity>
               );
             })}
           </View>
 
-          {/* Today's Schedule Card */}
+          {/* Today's Prescribed AI Workout Card */}
           <View style={styles.scheduleCard}>
             <View style={styles.scheduleTop}>
               <View style={styles.scheduleTopLeft}>
                 <View style={[styles.pill, styles.pillLime]}>
-                  <Text style={styles.pillText}>TODAY</Text>
+                  <Text style={styles.pillText}>
+                    AI RECOMMENDATION · {todaySuggestion?.recovery_status?.readiness_score ?? 100}% READINESS
+                  </Text>
                 </View>
-                <Text style={styles.scheduleSub}>WEEK 3 · DAY 2</Text>
               </View>
-              <TouchableOpacity activeOpacity={0.7}>
-                <Icon name="more" size={20} color={C.textSecondary} />
-              </TouchableOpacity>
             </View>
 
-            <Text style={styles.scheduleTitle}>Chest & Triceps</Text>
-            <Text style={styles.scheduleMeta}>Strength · 6 exercises · 45 min</Text>
+            <Text style={styles.scheduleTitle}>
+              {todaySuggestion?.day_name || 'Full Body Workout'}
+            </Text>
+            <Text style={styles.scheduleMeta}>
+              {todaySuggestion?.target_muscle_groups?.slice(0, 4).join(' · ').toUpperCase() ||
+                'HYPERTROPHY'}
+              {' · '}
+              {todaySuggestion?.exercises?.length || 6} exercises · ~45 min
+            </Text>
 
-            {/* Exercise Stack */}
+            {/* Exercise Stack Preview */}
             <View style={styles.exerciseStack}>
-              {EXERCISES_LIST.slice(0, 3).map((item, i) => (
-                <View key={item.name} style={styles.stackRow}>
+              {todaySuggestion?.exercises?.slice(0, 3).map((item, idx) => (
+                <View key={item.exercise.id} style={styles.stackRow}>
                   <View style={styles.exerciseArt}>
-                    <Text style={styles.exerciseArtText}>{item.letter}</Text>
+                    <Text style={styles.exerciseArtText}>
+                      {getInitials(item.exercise.name)}
+                    </Text>
                   </View>
                   <View style={styles.stackInfo}>
-                    <Text style={styles.stackName}>{item.name}</Text>
-                    <Text style={styles.stackMeta}>{item.meta}</Text>
+                    <Text style={styles.stackName}>{item.exercise.name}</Text>
+                    <Text style={styles.stackMeta}>
+                      {item.target_sets} sets · {item.target_reps_min}–{item.target_reps_max} reps
+                      {item.suggested_weight_kg ? ` · Suggested ${item.suggested_weight_kg} kg` : ''}
+                    </Text>
                   </View>
-                  {i === 2 ? (
+                  {idx === 2 && (todaySuggestion?.exercises?.length ?? 0) > 3 ? (
                     <View style={styles.moreCountBadge}>
-                      <Text style={styles.moreCountText}>+3</Text>
+                      <Text style={styles.moreCountText}>
+                        +{todaySuggestion!.exercises.length - 3}
+                      </Text>
                     </View>
                   ) : null}
                 </View>
@@ -309,28 +557,44 @@ export default function WorkoutScreen() {
 
             <TouchableOpacity
               style={styles.startWorkoutFullBtn}
-              onPress={() => setActive(true)}
+              onPress={handleStartWorkout}
               activeOpacity={0.85}
+              disabled={isLoading}
             >
-              <Icon name="play" size={17} color="#11150E" />
-              <Text style={styles.startWorkoutFullText}>Start workout</Text>
+              {isLoading ? (
+                <ActivityIndicator size="small" color="#101211" />
+              ) : (
+                <>
+                  <Icon name="play" size={17} color="#11150E" />
+                  <Text style={styles.startWorkoutFullText}>Start Prescribed Workout</Text>
+                </>
+              )}
             </TouchableOpacity>
           </View>
 
           {/* This Week Summary */}
-          <SectionTitle title="This week" />
+          <SectionTitle title="Training History" />
           <View style={styles.weekSummaryCard}>
             <View style={styles.summaryCol}>
-              <Text style={styles.summaryNumber}>2</Text>
+              <Text style={styles.summaryNumber}>{history.length}</Text>
               <Text style={styles.summaryLabel}>Workouts</Text>
             </View>
             <View style={styles.summaryCol}>
-              <Text style={styles.summaryNumber}>1h 34m</Text>
+              <Text style={styles.summaryNumber}>
+                {Math.round(
+                  history.reduce((acc, h) => acc + (h.duration_seconds || 0), 0) / 60
+                )}{' '}
+                min
+              </Text>
               <Text style={styles.summaryLabel}>Training time</Text>
             </View>
             <View style={[styles.summaryCol, { borderRightWidth: 0 }]}>
-              <Text style={styles.summaryNumber}>12.4k</Text>
-              <Text style={styles.summaryLabel}>Volume</Text>
+              <Text style={styles.summaryNumber}>
+                {Math.round(
+                  history.reduce((acc, h) => acc + (h.total_volume_kg || 0), 0) / 1000
+                )}k
+              </Text>
+              <Text style={styles.summaryLabel}>Volume (kg)</Text>
             </View>
           </View>
 
@@ -340,19 +604,16 @@ export default function WorkoutScreen() {
             <Icon name="search" size={18} color="#777F78" />
             <TextInput
               style={styles.searchInput}
-              placeholder="Search exercises"
+              placeholder="Search exercise library"
               placeholderTextColor="#777F78"
               value={searchQuery}
               onChangeText={setSearchQuery}
             />
-            <TouchableOpacity activeOpacity={0.7} accessibilityLabel="Filter">
-              <Icon name="settings" size={18} color="#777F78" />
-            </TouchableOpacity>
           </View>
 
-          {/* Category Chips */}
+          {/* Category Filter Chips */}
           <View style={styles.chipsRow}>
-            {['All', 'Chest', 'Back', 'Legs', 'Arms'].map((cat) => {
+            {['All', 'Chest', 'Back', 'Shoulders', 'Legs', 'Biceps', 'Triceps', 'Core'].map((cat) => {
               const isCatActive = filterCategory === cat;
               return (
                 <TouchableOpacity
@@ -361,19 +622,85 @@ export default function WorkoutScreen() {
                   onPress={() => setFilterCategory(cat)}
                   activeOpacity={0.7}
                 >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      isCatActive && styles.chipTextActive,
-                    ]}
-                  >
+                  <Text style={[styles.chipText, isCatActive && styles.chipTextActive]}>
                     {cat}
                   </Text>
                 </TouchableOpacity>
               );
             })}
           </View>
+
+          {/* Filtered Exercise Cards */}
+          <View style={styles.libraryGrid}>
+            {exerciseLibrary.slice(0, 6).map((ex) => (
+              <View key={ex.id} style={styles.libraryItemCard}>
+                <View style={styles.libraryItemLeft}>
+                  <View style={styles.exerciseArt}>
+                    <Text style={styles.exerciseArtText}>{getInitials(ex.name)}</Text>
+                  </View>
+                  <View style={styles.libraryItemInfo}>
+                    <Text style={styles.libraryItemName}>{ex.name}</Text>
+                    <Text style={styles.libraryItemMeta}>
+                      {ex.muscle_groups.slice(0, 2).join(' · ')} · {ex.movement_type}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.difficultyPill}>
+                  <Text style={styles.difficultyPillText}>{ex.difficulty}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
         </ScrollView>
+
+        {/* Workout Complete Summary Modal */}
+        <Modal
+          visible={showSummaryModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowSummaryModal(false)}
+        >
+          <View style={styles.modalBackdrop}>
+            <View style={styles.summaryModalBox}>
+              <View style={styles.trophyIconBox}>
+                <Icon name="trophy" size={32} color="#101211" />
+              </View>
+              <Text style={styles.modalTitle}>Workout Complete!</Text>
+              <Text style={styles.modalSubtitle}>
+                Crushed your session. Progression and sets recorded.
+              </Text>
+
+              <View style={styles.modalStatsRow}>
+                <View style={styles.modalStatCol}>
+                  <Text style={styles.modalStatValue}>
+                    {formatTime(lastFinishedSession?.duration_seconds || 0)}
+                  </Text>
+                  <Text style={styles.modalStatLabel}>DURATION</Text>
+                </View>
+                <View style={styles.modalStatCol}>
+                  <Text style={styles.modalStatValue}>
+                    {(lastFinishedSession?.total_volume_kg || 0).toLocaleString()} kg
+                  </Text>
+                  <Text style={styles.modalStatLabel}>VOLUME</Text>
+                </View>
+                <View style={styles.modalStatCol}>
+                  <Text style={styles.modalStatValue}>
+                    {lastFinishedSession?.total_sets_completed || 0}
+                  </Text>
+                  <Text style={styles.modalStatLabel}>SETS</Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={styles.modalDoneBtn}
+                onPress={() => setShowSummaryModal(false)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.modalDoneText}>Return to Dashboard</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
       </SafeAreaView>
     </View>
   );
@@ -398,7 +725,7 @@ const styles = StyleSheet.create({
   activeContent: {
     paddingHorizontal: 20,
     paddingTop: 10,
-    paddingBottom: 130,
+    paddingBottom: 165,
   },
   weekStrip: {
     flexDirection: 'row',
@@ -446,17 +773,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  todayIndicatorDot: {
+    position: 'absolute',
+    bottom: 6,
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: C.accent,
+  },
   scheduleCard: {
     backgroundColor: '#191C1A',
+    borderRadius: 24,
+    padding: 20,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.075)',
-    borderRadius: 25,
-    padding: 19,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    marginBottom: 20,
   },
   scheduleTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 12,
   },
   scheduleTopLeft: {
     flexDirection: 'row',
@@ -464,82 +801,80 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   pill: {
-    borderRadius: 20,
-    paddingHorizontal: 9,
-    paddingVertical: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: Radius.full,
   },
   pillLime: {
-    backgroundColor: C.accent,
+    backgroundColor: 'rgba(184, 243, 74, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(184, 243, 74, 0.25)',
   },
   pillText: {
-    fontSize: 9,
-    fontWeight: FontWeight.extrabold,
-    letterSpacing: 1,
-    color: '#11150E',
-  },
-  scheduleSub: {
-    fontSize: 9,
-    color: '#7F867F',
+    fontSize: 11,
+    fontWeight: FontWeight.bold,
+    color: C.accent,
     letterSpacing: 0.5,
   },
   scheduleTitle: {
-    fontSize: 23,
-    fontWeight: FontWeight.bold,
-    color: C.text,
-    marginTop: 16,
-    marginBottom: 3,
+    fontSize: 22,
+    fontWeight: FontWeight.extrabold,
+    color: '#DFE3DD',
+    marginBottom: 4,
   },
   scheduleMeta: {
-    fontSize: 11,
-    color: '#8F9690',
+    fontSize: FontSize.xs,
+    color: '#777E78',
+    marginBottom: 18,
   },
   exerciseStack: {
-    marginTop: 17,
+    gap: 12,
+    marginBottom: 20,
   },
   stackRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
-    paddingVertical: 9,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(255, 255, 255, 0.075)',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderRadius: 14,
+    padding: 10,
   },
   exerciseArt: {
-    width: 36,
-    height: 36,
+    width: 38,
+    height: 38,
     borderRadius: 10,
-    backgroundColor: '#292E29',
+    backgroundColor: '#242825',
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 12,
   },
   exerciseArtText: {
-    color: '#ADB5AD',
-    fontSize: 10,
+    fontSize: 13,
     fontWeight: FontWeight.bold,
+    color: C.accent,
   },
   stackInfo: {
     flex: 1,
   },
   stackName: {
-    fontSize: 11,
+    fontSize: 14,
     fontWeight: FontWeight.bold,
-    color: C.text,
+    color: '#DFE3DD',
+    marginBottom: 2,
   },
   stackMeta: {
-    fontSize: 9,
-    color: '#7E857F',
-    marginTop: 1,
+    fontSize: 12,
+    color: '#777E78',
   },
   moreCountBadge: {
-    backgroundColor: '#262A27',
-    paddingHorizontal: 7,
+    backgroundColor: '#242825',
+    paddingHorizontal: 8,
     paddingVertical: 4,
-    borderRadius: 8,
+    borderRadius: 10,
   },
   moreCountText: {
-    fontSize: 10,
-    color: '#ADB5AD',
+    fontSize: 11,
     fontWeight: FontWeight.bold,
+    color: C.accent,
   },
   startWorkoutFullBtn: {
     flexDirection: 'row',
@@ -547,308 +882,422 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 8,
     backgroundColor: C.accent,
-    borderRadius: 14,
+    borderRadius: 16,
     paddingVertical: 14,
-    marginTop: 18,
   },
   startWorkoutFullText: {
-    color: '#11150E',
-    fontSize: 13,
+    fontSize: 15,
     fontWeight: FontWeight.extrabold,
+    color: '#11150E',
   },
   weekSummaryCard: {
     flexDirection: 'row',
     backgroundColor: '#191C1A',
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.075)',
-    borderRadius: 21,
-    paddingVertical: 17,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+    paddingVertical: 14,
+    marginBottom: 20,
   },
   summaryCol: {
     flex: 1,
     alignItems: 'center',
     borderRightWidth: 1,
-    borderRightColor: 'rgba(255, 255, 255, 0.075)',
+    borderRightColor: 'rgba(255, 255, 255, 0.05)',
   },
   summaryNumber: {
-    fontSize: 14,
-    fontWeight: FontWeight.bold,
-    color: C.text,
+    fontSize: 18,
+    fontWeight: FontWeight.extrabold,
+    color: '#DFE3DD',
+    marginBottom: 2,
   },
   summaryLabel: {
-    fontSize: 9,
-    color: '#828983',
-    marginTop: 2,
+    fontSize: 11,
+    color: '#777E78',
   },
   searchBox: {
-    height: 47,
-    backgroundColor: '#191C1A',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.075)',
-    borderRadius: 14,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 13,
+    backgroundColor: '#191C1A',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+    paddingHorizontal: 14,
+    height: 44,
+    marginBottom: 12,
     gap: 10,
   },
   searchInput: {
     flex: 1,
-    color: C.text,
-    fontSize: 12,
+    fontSize: 14,
+    color: '#DFE3DD',
   },
   chipsRow: {
     flexDirection: 'row',
-    gap: 7,
-    marginTop: 11,
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 16,
   },
   chip: {
-    paddingHorizontal: 13,
-    paddingVertical: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: Radius.full,
     backgroundColor: '#191C1A',
-    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
   },
   chipActive: {
-    backgroundColor: '#DCEFC0',
+    backgroundColor: C.accent,
+    borderColor: C.accent,
   },
   chipText: {
-    fontSize: 10,
-    color: '#898F89',
-    fontWeight: FontWeight.medium,
+    fontSize: 12,
+    fontWeight: FontWeight.semibold,
+    color: '#777E78',
   },
   chipTextActive: {
-    color: '#17200C',
+    color: '#101210',
+  },
+  libraryGrid: {
+    gap: 10,
+  },
+  libraryItemCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#191C1A',
+    borderRadius: 16,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  libraryItemLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  libraryItemInfo: {
+    marginLeft: 12,
+    flex: 1,
+  },
+  libraryItemName: {
+    fontSize: 14,
     fontWeight: FontWeight.bold,
+    color: '#DFE3DD',
+    marginBottom: 2,
+  },
+  libraryItemMeta: {
+    fontSize: 12,
+    color: '#777E78',
+    textTransform: 'capitalize',
+  },
+  difficultyPill: {
+    backgroundColor: '#242825',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  difficultyPillText: {
+    fontSize: 10,
+    fontWeight: FontWeight.semibold,
+    color: C.accent,
+    textTransform: 'capitalize',
   },
 
   // Active workout styles
   activeWorkoutHeader: {
     flexDirection: 'row',
-    alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 20,
+    alignItems: 'center',
+    marginBottom: 16,
   },
-  iconButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#1A1D1B',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.075)',
+  discardBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#261A1A',
     alignItems: 'center',
     justifyContent: 'center',
+    marginRight: 12,
   },
   activeWorkoutCenter: {
-    alignItems: 'center',
+    flex: 1,
   },
   activeWorkoutKicker: {
-    color: C.accent,
-    fontSize: 9,
+    fontSize: 10,
     fontWeight: FontWeight.bold,
-    letterSpacing: 1.2,
+    color: C.accent,
+    letterSpacing: 1,
+    marginBottom: 2,
   },
   activeWorkoutTitle: {
-    color: C.text,
-    fontSize: 15,
-    fontWeight: FontWeight.bold,
-    marginTop: 2,
+    fontSize: 20,
+    fontWeight: FontWeight.extrabold,
+    color: '#DFE3DD',
   },
   finishBtn: {
     backgroundColor: C.accent,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: Radius.full,
   },
   finishBtnText: {
-    color: '#101210',
-    fontSize: 11,
-    fontWeight: FontWeight.extrabold,
+    fontSize: 13,
+    fontWeight: FontWeight.bold,
+    color: '#101211',
   },
   workoutTimeBar: {
     flexDirection: 'row',
-    backgroundColor: '#181B19',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.075)',
+    backgroundColor: '#191C1A',
     borderRadius: 18,
     paddingVertical: 14,
     marginBottom: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
   },
   workoutTimeItem: {
     flex: 1,
     alignItems: 'center',
     borderRightWidth: 1,
-    borderRightColor: 'rgba(255, 255, 255, 0.075)',
+    borderRightColor: 'rgba(255, 255, 255, 0.05)',
   },
   workoutTimeLabel: {
-    color: '#787F79',
-    fontSize: 9,
+    fontSize: 11,
+    color: '#777E78',
+    marginBottom: 2,
   },
   workoutTimeValue: {
-    color: C.text,
-    fontSize: 14,
-    fontWeight: FontWeight.bold,
-    marginTop: 2,
+    fontSize: 16,
+    fontWeight: FontWeight.extrabold,
+    color: '#DFE3DD',
   },
   activeExerciseCard: {
-    backgroundColor: '#181B19',
+    backgroundColor: '#191C1A',
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 16,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.075)',
-    borderRadius: 22,
-    padding: 15,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   exerciseHeading: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    marginBottom: 14,
   },
   exerciseHeadingInfo: {
     flex: 1,
   },
   exerciseName: {
-    color: C.text,
-    fontSize: 14,
+    fontSize: 16,
     fontWeight: FontWeight.bold,
+    color: '#DFE3DD',
+    marginBottom: 2,
   },
   exerciseMeta: {
-    color: '#7F867F',
-    fontSize: 10,
-    marginTop: 1,
+    fontSize: 12,
+    color: '#777E78',
   },
   setLabels: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-    marginTop: 18,
-    marginBottom: 7,
+    paddingHorizontal: 8,
+    marginBottom: 6,
   },
   setLabelText: {
-    fontSize: 8,
-    color: '#6F766F',
-    textAlign: 'center',
+    fontSize: 10,
     fontWeight: FontWeight.bold,
+    color: '#777E78',
+    letterSpacing: 0.5,
   },
   setRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 7,
-    paddingVertical: 6,
-    borderRadius: 8,
+    backgroundColor: '#141715',
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    marginBottom: 6,
+    gap: 8,
   },
   setRowCompleted: {
-    backgroundColor: 'rgba(184, 243, 74, 0.035)',
+    backgroundColor: 'rgba(184, 243, 74, 0.06)',
+    borderColor: 'rgba(184, 243, 74, 0.2)',
+    borderWidth: 1,
   },
   setNum: {
     width: 28,
-    color: C.text,
-    fontSize: 11,
+    fontSize: 13,
     fontWeight: FontWeight.bold,
+    color: '#777E78',
     textAlign: 'center',
   },
   setPrev: {
-    flex: 1.25,
-    color: '#828983',
-    fontSize: 10,
-    textAlign: 'center',
+    flex: 1.2,
+    fontSize: 12,
+    color: '#8A928B',
   },
   setInput: {
-    flex: 0.7,
-    backgroundColor: '#242824',
-    borderRadius: 9,
+    flex: 0.8,
+    height: 36,
+    backgroundColor: '#1B201D',
+    borderRadius: 8,
     textAlign: 'center',
-    paddingVertical: 7,
-    color: C.text,
-    fontSize: 12,
+    fontSize: 14,
+    fontWeight: FontWeight.bold,
+    color: '#DFE3DD',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  setInputDone: {
+    backgroundColor: 'transparent',
+    borderColor: 'transparent',
+    color: C.accent,
   },
   setCheckBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
-    backgroundColor: '#272C28',
+    width: 34,
+    height: 34,
+    borderRadius: 8,
+    backgroundColor: '#242825',
     alignItems: 'center',
     justifyContent: 'center',
   },
   setCheckBtnDone: {
     backgroundColor: C.accent,
   },
-  addSetBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 5,
-    backgroundColor: '#222622',
-    borderRadius: 11,
-    paddingVertical: 10,
-    marginTop: 10,
-  },
-  addSetText: {
-    color: '#ADB3AD',
-    fontSize: 11,
-    fontWeight: FontWeight.semibold,
-  },
-  nextExerciseCard: {
-    marginTop: 13,
-    backgroundColor: '#181B19',
+  emptySessionBox: {
+    backgroundColor: '#191C1A',
     borderRadius: 18,
-    padding: 15,
+    padding: 24,
+    alignItems: 'center',
   },
-  nextExerciseKicker: {
-    color: C.accent,
-    fontSize: 8,
+  emptySessionTitle: {
+    fontSize: 16,
     fontWeight: FontWeight.bold,
-    letterSpacing: 1,
+    color: '#DFE3DD',
+    marginBottom: 4,
   },
-  nextExerciseName: {
-    color: C.text,
+  emptySessionSub: {
     fontSize: 13,
-    fontWeight: FontWeight.bold,
-    marginTop: 4,
-  },
-  nextExerciseMeta: {
     color: '#777E78',
-    fontSize: 9,
-    marginTop: 1,
   },
   floatingRestTimer: {
     position: 'absolute',
-    bottom: 24,
+    bottom: 84,
     left: 20,
     right: 20,
-    backgroundColor: '#242824',
-    borderWidth: 1,
-    borderColor: '#394036',
-    borderRadius: 18,
-    paddingHorizontal: 12,
+    backgroundColor: '#191C1A',
+    borderRadius: 24,
     paddingVertical: 10,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(184, 243, 74, 0.3)',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
+    shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.5,
-    shadowRadius: 20,
+    shadowRadius: 12,
     elevation: 8,
+    zIndex: 50,
+    gap: 12,
   },
   restTimerInfo: {
     flex: 1,
   },
   restTimerKicker: {
-    color: '#858C86',
-    fontSize: 8,
-    fontWeight: FontWeight.bold,
-  },
-  restTimerValue: {
-    color: C.text,
-    fontSize: 15,
-    fontWeight: FontWeight.bold,
-  },
-  restTimerBtn: {
-    backgroundColor: '#303530',
-    borderRadius: 9,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-  },
-  restTimerBtnText: {
-    color: '#DFE3DD',
     fontSize: 10,
     fontWeight: FontWeight.bold,
+    color: '#777E78',
+    letterSpacing: 0.5,
+  },
+  restTimerValue: {
+    fontSize: 18,
+    fontWeight: FontWeight.extrabold,
+    color: C.accent,
+  },
+  restTimerBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: Radius.full,
+    backgroundColor: '#242825',
+  },
+  restTimerBtnText: {
+    fontSize: 12,
+    fontWeight: FontWeight.bold,
+    color: '#DFE3DD',
+  },
+
+  // Summary Modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  summaryModalBox: {
+    width: '100%',
+    backgroundColor: '#191C1A',
+    borderRadius: 24,
+    padding: 24,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  trophyIconBox: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: C.accent,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 22,
+    fontWeight: FontWeight.extrabold,
+    color: '#DFE3DD',
+    marginBottom: 6,
+  },
+  modalSubtitle: {
+    fontSize: 13,
+    color: '#777E78',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  modalStatsRow: {
+    flexDirection: 'row',
+    width: '100%',
+    backgroundColor: '#141715',
+    borderRadius: 16,
+    paddingVertical: 14,
+    marginBottom: 20,
+  },
+  modalStatCol: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  modalStatValue: {
+    fontSize: 16,
+    fontWeight: FontWeight.extrabold,
+    color: C.accent,
+    marginBottom: 2,
+  },
+  modalStatLabel: {
+    fontSize: 10,
+    fontWeight: FontWeight.bold,
+    color: '#777E78',
+  },
+  modalDoneBtn: {
+    width: '100%',
+    backgroundColor: C.accent,
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
+  modalDoneText: {
+    fontSize: 15,
+    fontWeight: FontWeight.extrabold,
+    color: '#101211',
   },
 });

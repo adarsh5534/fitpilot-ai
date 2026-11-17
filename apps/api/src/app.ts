@@ -9,6 +9,8 @@ import { requestLogger } from './middleware/request-logger';
 import { healthRouter } from './routes/health.router';
 import { authRouter } from './routes/auth.router';
 import { profileRouter } from './routes/profile.router';
+import { exerciseRouter } from './routes/exercise.router';
+import { workoutRouter } from './routes/workout.router';
 
 // ─── Express Application Factory ──────────────────────────────────────────────
 // We export a factory function (not the app directly) so we can create
@@ -67,6 +69,8 @@ export function createApp() {
   app.use('/health', healthRouter);
   app.use('/auth', authRouter);
   app.use('/profile', profileRouter);
+  app.use('/exercises', exerciseRouter);
+  app.use('/workouts', workoutRouter);
 
   // 404 handler — catches unmatched routes before error handler
   app.use((_req, res) => {

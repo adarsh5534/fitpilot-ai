@@ -33,8 +33,11 @@ export type IconName =
   | 'zap'
   | 'camera'
   | 'lock'
+  | 'shield'
+  | 'fileText'
   | 'help'
-  | 'logout';
+  | 'logout'
+  | 'x';
 
 interface IconProps {
   name: IconName;
@@ -220,6 +223,15 @@ export function Icon({
             <Path d="M8 10V7a4 4 0 0 1 8 0v3" />
           </>
         );
+      case 'shield':
+        return <Path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />;
+      case 'fileText':
+        return (
+          <>
+            <Path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+            <Path d="M14 2v6h6M16 13H8M16 17H8M10 9H8" />
+          </>
+        );
       case 'help':
         return (
           <>
@@ -233,6 +245,8 @@ export function Icon({
             <Path d="M10 4H4v16h6M14 8l4 4-4 4M8 12h10" />
           </>
         );
+      case 'x':
+        return <Path d="M18 6 6 18M6 6l12 12" />;
       default:
         return null;
     }
