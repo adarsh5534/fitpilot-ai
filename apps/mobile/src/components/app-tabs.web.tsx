@@ -13,20 +13,20 @@ export default function AppTabs() {
       <TabSlot style={{ flex: 1 }} />
       <TabList asChild>
         <WebTabBar>
-          <TabTrigger name="home" href={'/(tabs)/index' as any} asChild>
+          <TabTrigger name="home" href={'/(tabs)'} asChild>
             <WebTabButton>Home</WebTabButton>
           </TabTrigger>
-          <TabTrigger name="workout" href={'/(tabs)/workout/index' as any} asChild>
+          <TabTrigger name="workout" href={'/(tabs)/workout'} asChild>
             <WebTabButton>Workout</WebTabButton>
           </TabTrigger>
-          <TabTrigger name="nutrition" href={'/(tabs)/nutrition/index' as any} asChild>
+          <TabTrigger name="nutrition" href={'/(tabs)/nutrition'} asChild>
             <WebTabButton>Nutrition</WebTabButton>
           </TabTrigger>
-          <TabTrigger name="progress" href={'/(tabs)/progress/index' as any} asChild>
+          <TabTrigger name="progress" href={'/(tabs)/progress'} asChild>
             <WebTabButton>Progress</WebTabButton>
           </TabTrigger>
-          <TabTrigger name="coach" href={'/(tabs)/coach/index' as any} asChild>
-            <WebTabButton>AI Coach</WebTabButton>
+          <TabTrigger name="profile" href={'/(tabs)/profile'} asChild>
+            <WebTabButton>Profile</WebTabButton>
           </TabTrigger>
         </WebTabBar>
       </TabList>

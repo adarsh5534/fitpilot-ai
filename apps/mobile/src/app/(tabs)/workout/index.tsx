@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -145,7 +146,22 @@ export default function WorkoutScreen() {
     }
   };
 
-  const handleDiscardWorkout = () => {
+  const handleDiscardWorkout = async () => {
+    if (Platform.OS === 'web') {
+      const confirmed =
+        typeof window !== 'undefined'
+          ? window.confirm('Are you sure you want to discard this workout session? Sets and progress will not be recorded.')
+          : true;
+      if (confirmed) {
+        const ok = await cancelSession();
+        if (!ok) {
+          const err = useWorkoutStore.getState().error;
+          alert(err || 'Failed to cancel session');
+        }
+      }
+      return;
+    }
+
     Alert.alert(
       'Discard Workout?',
       'Are you sure you want to discard this workout session? Sets and progress will not be recorded.',
@@ -166,7 +182,25 @@ export default function WorkoutScreen() {
     );
   };
 
-  const handleFinishWorkout = () => {
+  const handleFinishWorkout = async () => {
+    if (Platform.OS === 'web') {
+      const confirmed =
+        typeof window !== 'undefined'
+          ? window.confirm('Are you ready to complete and log this workout?')
+          : true;
+      if (confirmed) {
+        const res = await finishSession('Workout completed successfully');
+        if (res) {
+          setLastFinishedSession(res);
+          setShowSummaryModal(true);
+        } else {
+          const err = useWorkoutStore.getState().error;
+          alert(err || 'Failed to finish workout');
+        }
+      }
+      return;
+    }
+
     Alert.alert(
       'Finish Workout',
       'Are you ready to complete and log this workout?',

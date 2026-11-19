@@ -50,7 +50,7 @@ export default function RootLayout() {
       } else {
         // Profile is complete: redirect away from auth pages to main tabs
         if (inAuthGroup) {
-          router.replace('/(tabs)/index' as any);
+          router.replace('/(tabs)');
         }
       }
     }

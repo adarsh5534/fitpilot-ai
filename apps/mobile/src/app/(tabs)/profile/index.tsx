@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -55,8 +56,8 @@ export default function ProfileScreen() {
   // Edit Modal State
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
   const [editName, setEditName] = useState(profile?.display_name || '');
-  const [editHeight, setEditHeight] = useState(profile?.height_cm ? String(profile.height_cm) : '182');
-  const [editWeight, setEditWeight] = useState(profile?.weight_kg ? String(profile.weight_kg) : '78.4');
+  const [editHeight, setEditHeight] = useState(profile?.height_cm ? String(profile.height_cm) : '-');
+  const [editWeight, setEditWeight] = useState(profile?.weight_kg ? String(profile.weight_kg) : '-');
   const [isSaving, setIsSaving] = useState(false);
 
   // Info Modal for static settings items
@@ -66,9 +67,9 @@ export default function ProfileScreen() {
   // Derived User Stats
   const displayName = profile?.display_name || 'Alex Morgan';
   const email = user?.email || 'athlete@fitpilot.ai';
-  const weightKg = profile?.weight_kg ? Number(profile.weight_kg).toFixed(1) : '78.4';
-  const heightCm = profile?.height_cm ? Math.round(Number(profile.height_cm)).toString() : '182';
-
+  const weightKg = profile?.weight_kg ? Number(profile.weight_kg).toFixed(1) : '-';
+  const heightCm = profile?.height_cm ? Math.round(Number(profile.height_cm)).toString() : '-';
+  console.log(profile)
   const birthYear = profile?.date_of_birth
     ? new Date(profile.date_of_birth).getFullYear()
     : 1997;
@@ -103,7 +104,19 @@ export default function ProfileScreen() {
     }
   };
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    if (Platform.OS === 'web') {
+      const confirmed =
+        typeof window !== 'undefined'
+          ? window.confirm('Are you sure you want to log out of FitPilot AI?')
+          : true;
+      if (confirmed) {
+        await clearSession();
+        router.replace('/(auth)/login' as any);
+      }
+      return;
+    }
+
     Alert.alert(
       'Log Out',
       'Are you sure you want to log out of FitPilot AI?',
@@ -114,6 +127,7 @@ export default function ProfileScreen() {
           style: 'destructive',
           onPress: async () => {
             await clearSession();
+            router.replace('/(auth)/login' as any);
           },
         },
       ],
